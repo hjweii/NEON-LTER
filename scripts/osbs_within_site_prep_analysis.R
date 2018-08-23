@@ -1,3 +1,9 @@
+# Title:        osbs Within Site Analysis
+# Site:         osbs Forest
+# Data Sources: 
+# Authors:      Phoebe Zarnetske, Cameo Arnold, Huijie Wei
+# Date:         20 Aug 2018
+
 #Close graphics devices
 graphics.off()
 
@@ -113,6 +119,48 @@ dist_rich1<-reshape(dist_rich, v.names="distance_m",    # the values you want to
 str(dist_rich1)
 head(dist_rich1)
 
+write.csv(dist_rich1, file="~/Documents/NEON_LTER_2018/dist_rich.csv", row.names=F)
+
+## add the fire frequency and the burn times data
+library(rgdal)
+firelog<-readOGR(dsn = "./osbs_points/01osbs_points.shp")
+names(firelog)
+
+#subset elevation, slope, aspect, and landcover fire frequency and last burn terrestrial data
+myvars_fire <- c("elevatn", "siteID", "plotID", "nlcdCls", "slpGrdn", "slpAspc","Freq")
+env_fire <- firelog[myvars_fire]
+head(env_fire)
+str(env_fire)
+
+write.csv(env_fire,file = "osbs_fire_data.csv",row.names = F)
+
+#Currently, it is in latitude and longitude, but in order to measure distance in meters we need to reproject the data into UTMs. You should look up the appropriate zone for your site. For osbs we needed UTM Zone 17. 
+env_fire_ter<-spTransform(env_fire, CRS("+proj=utm +zone=17 ellps=WGS84"))
+str(env_fire_ter)
+env_fire_ter<-data.frame(env_fire_ter)
+
+#We need to make sure we have one value for slope and elevation before proceeding. This shows the duplicate entries by plotID
+env_fire_ter[duplicated(env_fire_ter$plotID),]
+
+#Take the average of slp, asp, and elev by plotID.
+attach(env_fire_ter)
+env_fire_ter<-aggregate(env_fire_ter[c("elevatn","slpAspc","slpGrdn","Freq")],list(plotID=plotID, nlcdCls=nlcdCls),FUN=mean)
+detach(env_fire_ter)
+head(env_fire_ter)
+
+#Check it
+env_fire_ter[duplicated(env_fire_ter$plotID),]
+
+## merge the fire data and richnessdata
+head(dist_rich1)
+head(env_fire)
+# dist_rich2<-merge(dist_rich1,env_fire,by=c("plotID", "nlcdCls", "elevatn", "slpAspc", "slpGrdn"),all=T)
+dist_rich2<-left_join(dist_rich1, env_fire@data, by=c("plotID", "nlcdCls", "elevatn", "slpAspc", "slpGrdn"))
+head(dist_rich2)
+
+write.csv(dist_rich2,file = "dist_rich_fire_data.csv",row.names = F)
+
+
 # ------------------------------------------------------------
 # Now we are going to look at elevation with species richness
 # ------------------------------------------------------------
@@ -161,14 +209,16 @@ head(osbs_ter_env)
 #writing a csv is necessary to merge the files. It will NOT work without first writing a csv and importing it again. 
 
 #merge dist_rich1 and osbs_ter_env
-names(dist_rich1)
+names(dist_rich2)
 names(osbs_ter_env)
-osbs<-merge(osbs_ter_env, dist_rich1, by=c("plotID", "nlcdCls", "elevatn", "slpAspc", "slpGrdn"),all=T)
+osbs<-merge(osbs_ter_env, dist_rich2, by=c("plotID", "nlcdCls", "elevatn", "slpAspc", "slpGrdn"),all=T)
 head(osbs)
 
 #Get rid of NAs for plots not sampled yet.
 osbs<- subset(osbs,is.na(osbs$richness)==F)
 osbs$richness
+osbs[is.na(osbs)] <- 0
+head(osbs)
 
 #Get rid of unused Factor levels
 osbs$nlcdCls <- factor(osbs$nlcdCls)
@@ -179,6 +229,7 @@ osbs$plotID
 #Check for duplicates
 osbs[duplicated(osbs$plotID),]
 
+write.csv(osbs,"osbs_disturbance",row.names = F)
 
 #Now that we have a code with all of the environment, richness, and distance data we can start subsetting by taxa.
 #-------------------------------------------------------------------------------
@@ -226,7 +277,7 @@ eml <- ggplot(osbs_mammal, aes(x=elevatn, y=richness)) +
   geom_point(aes()) + scale_y_log10()  
 eml
 
-##**Cameo stopped here in reviewing this code.**
+
 
 #################################################################################
 #Histograms
@@ -257,17 +308,21 @@ hist(osbs_mammal$ln.richness)
 save.image("neon_within_site_prep.RData")
 #############################################
 
-#Now you're ready for modeling. See script neon_within_site_analysis.
+#Now you're ready for modeling. 
 
 
 # This is the first linear model. First is the plant species richness data ~ all your predictor variables.
+plant2<-osbs_plant$Freq^2
 pm1<-lm(osbs_plant$ln.richness~osbs_plant$distance_m.building+
           osbs_plant$distance_m.roads+
           osbs_plant$nlcdCls+
-          osbs_plant$elevatn)
+          osbs_plant$elevatn+
+          osbs_plant$Freq+plant2
+        # +osbs_plant$nlcdCls:osbs_plant$Freq
+        )
 summary(pm1)
 anova(pm1)
-#significant variables: landcover(nlcdCls), 
+#significant variables: landcover(nlcdCls)
 
 #Follow this link if you need help interpreting your summary. https://www.quora.com/How-do-I-interpret-the-summary-of-a-linear-model-in-R
 
@@ -276,192 +331,159 @@ library(car)
 qqPlot(pm1)
 plot(pm1)
 
-#Reduced Model 1 - remove building
-pm2<-lm(osbs_plant$ln.richness~osbs_plant$distance_m.roads+
+#Reduced Model 1 - remove roads
+pm2<-lm(osbs_plant$ln.richness~osbs_plant$distance_m.building+
           osbs_plant$nlcdCls+
-          osbs_plant$elevatn)
+          osbs_plant$elevatn+
+          osbs_plant$Freq)
 summary(pm2)
 anova(pm2)
-#significant variables: landcover
+#significant variables:landcover(nlcdCls)
 
-#Reduced Model 2 - remove roads
-pm3<-lm(osbs_plant$ln.richness~osbs_plant$nlcdCls+
-          osbs_plant$elevatn)
+#Reduced Model 2 - remove building
+pm3<-lm(osbs_plant$ln.richness~
+          osbs_plant$nlcdCls+
+          osbs_plant$elevatn+
+          osbs_plant$Freq)
 summary(pm3)
 anova(pm3)
-#significant variables:  landcover
+#significant variables:  landcover(nlcdCls)
 
 
-#Reduced Model 3 - remove elevath
-pm4<-lm(osbs_plant$ln.richness~osbs_plant$nlcdCls)
+#Reduced Model 3 - remove elevation
+pm4<-lm(osbs_plant$ln.richness~
+          osbs_plant$nlcdCls+
+          osbs_plant$Freq)
 summary(pm4)
 anova(pm4)
-#significant variables:  landcover
+#significant variables:  landcover(nlcdCls)
+
+#Reduced Model 4 - remove frequency
+pm5<-lm(osbs_plant$ln.richness~
+          osbs_plant$nlcdCls)
+summary(pm5)
+anova(pm5)
+#significant variables:  landcover(nlcdCls)
+
 
 #ANOVA
 anova(pm1, pm2) #Not Significant
 anova(pm1, pm3) #Not Significant
 anova(pm1, pm4) #Not Significant
-
+anova(pm1, pm5) #Not Significant
 anova(pm2, pm3) #Not Significant
-anova(pm2, pm4)#Not Significant
-
+anova(pm2, pm4) #Not Significant
+anova(pm2, pm5) #Not Significant
 anova(pm3, pm4) #Not Significant
+anova(pm3, pm5) #Not Significant
+anova(pm4, pm5) #Not Significant
 
 
-# Plot the relationship between ln.richness and the distance_m.roads
-rich.road<-ggplot(osbs_plant, aes(x = distance_m.roads, y = ln.richness)) + 
-  geom_point() +
-  stat_smooth(method = "lm", col = "blue")
-rich.road+labs(title="Plants",
-               x ="Distance to Road", y = "Species Richness")
-
-# Since land cover is also significant we should plot the richness and look at the relationship between them.
+# # Plot the relationship between ln.richness and land cover 
 plot(osbs_plant$nlcdCls, osbs_plant$ln.richness,main="Plants", 
      xlab="Landcover Type", ylab="Species Richness")
 
+# osbs_plant$nlcdCls
+# # Compare within landcover types
+# # Create objects for each landcover type
+# emerg <- subset(osbs_plant, nlcdCls=='emergentHerbaceousWetlands')
+# evergr <- subset(osbs_plant, nlcdCls=='evergreenForest')
+# woody <- subset(osbs_plant, nlcdCls=='woodyWetlands')
+# 
+# # Model 1
+# emergevergr <- rbind(emerg,evergr)
+# glm1 <-glm(ln.richness~nlcdCls,family='gaussian', data=emergevergr)
+# Anova(glm1, type="II")
+# ## significant p<0.001
+# 
+# # Model 2
+# emergwoody <- rbind(emerg,woody)
+# glm2 <-glm(ln.richness~nlcdCls,family='gaussian', data=emergwoody)
+# Anova(glm2, type="II")
+# ## no significant
+# 
+# # Model 3
+# evergrwoody <- rbind(evergr,woody)
+# glm3 <-glm(ln.richness~nlcdCls,family='gaussian', data=evergrwoody)
+# Anova(glm3, type="II")
+# ## significant p<0.001
+# 
+# # There is significant difference between " evergreenForest" and other landcover classes
 
-osbs_plant$nlcdCls
-# Compare within landcover types
-# Create objects for each landcover type
-emerg <- subset(osbs_plant, nlcdCls=='emergentHerbaceousWetlands')
-evergr <- subset(osbs_plant, nlcdCls=='evergreenForest')
-woody <- subset(osbs_plant, nlcdCls=='woodyWetlands')
+# just for fun,Plot the relationship between richness and the burn frequency
+rich.burn<-ggplot(osbs_plant, aes(x = osbs_plant$Freq, y =osbs_plant$richness)) + 
+  geom_point() +
+  stat_smooth(method = "lm", col = "blue")
+rich.burn+labs(title="Plants",
+               x ="Fire frequency", y = "Species Richness")
 
-# Model 1
-emergevergr <- rbind(emerg,evergr)
-glm1 <-glm(ln.richness~nlcdCls,family='gaussian', data=emergevergr)
-Anova(glm1, type="II")
-## significant p<0.001
-
-# Model 2
-emergwoody <- rbind(emerg,woody)
-glm2 <-glm(ln.richness~nlcdCls,family='gaussian', data=emergwoody)
-Anova(glm2, type="II")
-## no significant
-
-# Model 3
-evergrwoody <- rbind(evergr,woody)
-glm3 <-glm(ln.richness~nlcdCls,family='gaussian', data=evergrwoody)
-Anova(glm3, type="II")
-## significant p<0.001
-
-# There is significant difference between " evergreenForest" and other landcover classes
 
 ################################################################################
 #Birds
 #Correlation Tests this computes all pairwise correlations using Pearson's correlation test.
 names(osbs_bird)
-pairs.panels(osbs_bird[c(2:5,7,9:11)])
-ggsave(filename = 'pairs.pdf', width = 7, height = 7)
+library(psych)
+pairs.panels(osbs_bird[c(2:5,7,9:10,12:13)])
+ggsave(filename = 'pairs.pdf', width = 10, height = 10)
+# no correlation
 
 # This is the second linear model. First is the bird species richness data ~ all your predictor variables.
+names(osbs_bird)
 bm1<-lm(osbs_bird$ln.richness~
           osbs_bird$distance_m.building+
           osbs_bird$distance_m.roads+
           osbs_bird$nlcdCls+
-          osbs_bird$elevatn)
+          osbs_bird$elevatn+
+          osbs_bird$Freq)
 summary(bm1)
 anova(bm1)
+#### no significant result at all
 
 # Normality of Residuals
 qqPlot(bm1)
 plot(bm1)
 
-#Reduced model 1 - remove building
-bm2<-lm(osbs_bird$ln.richness~osbs_bird$distance_m.roads+
-          osbs_bird$nlcdCls+
-          osbs_bird$elevatn
-)
-summary(bm2)
-anova(bm2)
-#Significant variables: elevath
 
-#Reduced model 2 - remove roads
-bm3<-lm(osbs_bird$ln.richness~
-          osbs_bird$nlcdCls+
-          osbs_bird$elevatn
-)
-summary(bm3)
-anova(bm3)
-#Significant variables: elevath
+##################################### mammals
+# This is the second linear model. First is the bird species richness data ~ all your predictor variables.
+names(osbs_mammal)
+mm1<-lm(osbs_mammal$ln.richness~
+          osbs_mammal$distance_m.building+
+          osbs_mammal$distance_m.roads+
+          osbs_mammal$nlcdCls+
+          osbs_mammal$elevatn+
+          osbs_mammal$Freq)
+summary(mm1)
+anova(mm1)
+#### lack of data 
 
-#Reduced model 3 - remove nlcdCls
-bm4<-lm(osbs_bird$ln.richness~osbs_bird$elevatn)
-summary(bm4)
-anova(bm4)
-#Significant variables: roads
-
-
-#ANOVA
-anova(bm1, bm2) #Not Significant
-anova(bm1, bm3) #Not Significant
-anova(bm1, bm4) #Not Significant
-
-anova(bm2, bm3) #Not Significant
-anova(bm2, bm4) #Not Significant
-
-anova(bm3, bm4) #Not Significant
-
-#plots
-bird.rich.road<-ggplot(osbs_bird, aes(x = distance_m.roads, y =ln.richness)) + 
-  geom_point() +
-  stat_smooth(method = "lm", col = "blue")
-bird.rich.road+labs(title="Birds",
-                    x ="Distance to Road", y = "Species Richness")
-
-
-
-# Plot the relationship between ln.richness and the distance_m.roads
-bird_rich_road<-ggplot(osbs_bird, aes(x = distance_m.roads, y =ln.richness)) + 
-  geom_point() +
-  stat_smooth(method = "lm", col = "blue")
-rich.road+labs(title="Birds",
-               x ="Distance to Road", y = "Species Richness")
-
-
-#let's look at the relationship between elevath
-bird.rich.temp<-ggplot(osbs_bird, aes(x = elevatn, y =ln.richness)) + 
-  geom_point() +
-  stat_smooth(method = "lm", col = "green")
-bird.rich.temp+labs(title="Birds",
-                    x ="Temperature", y = "Species Richness")
-#These plots show no relationship as expected from our non significant p-values indicated in the models.
-
+# Normality of Residuals
+qqPlot(bm1)
+plot(bm1)
 
 #Let's look at the relationship between bird richness and plant richness.
-osbs_bird$ln.richness.b<-osbs_bird$ln.richness
-osbs_plant$ln.richness.p<-osbs_plant$ln.richness
-bird.plant<-merge(osbs_bird, osbs_plant, by=c("plotID", "nlcdCls", "elevatn", "distance_m.roads"))
+osbs_bird$ln.richness<-osbs_bird$ln.richness
+osbs_plant$ln.richness<-osbs_plant$ln.richness
+bird.plant<-merge(osbs_bird, osbs_plant, by=c("plotID", "nlcdCls", "elevatn", "distance_m.roads")) ## why using the roads not the buildings
 names(bird.plant)
 
 #bird v plant model
-bird.plant.model<-lm(bird.plant$ln.richness.b~bird.plant$ln.richness.p)
+head(bird.plant)
+bird.plant.model<-lm(bird.plant$ln.richness.x~bird.plant$ln.richness.y)
 summary(bird.plant.model)
 
 #plot
-bird.plant.rich<-ggplot(bird.plant, aes(x = ln.richness.p, y =ln.richness.b)) +
+bird.plant.rich<-ggplot(bird.plant, aes(x = ln.richness.x, y =ln.richness.y)) +
   geom_point() +
   stat_smooth(method = "lm", col = "red")
-bird.plant.rich+labs(title="Richness", x ="plant richness", y = "bird richness")
+bird.plant.rich+labs(title="Richness", x ="bird richness", y = "plant richness")
 #Here we can see a slightly positive correlation between bird and plant richness. 
 #
 # Although the relationship is not significant, it can still play a role in the variation seen in bird richness.
 
-#Now, we should look at a model that incorporates distance to roads since that was the significant variable for both pm and bm models.
-
-bpm1<-lm(bird.plant$ln.richness.b~bird.plant$ln.richness.p+
-           bird.plant$distance_m.roads)
-summary(bpm1)
-
-bpm2<-lm(bird.plant$ln.richness.b~bird.plant$ln.richness.p*
-           bird.plant1$distance_m.roads)
-summary(bpm2)
-
-anova(bpm1, bpm2)
 
 #Correlation test
-cor.test(bird.plant$ln.richness.b,bird.plant$ln.richness.p)
+cor.test(bird.plant$ln.richness.x,bird.plant$ln.richness.y)
 
 #Now that within site analysis is complete, we can move on to cross-site prep (neon_all_site_prep.R)
 

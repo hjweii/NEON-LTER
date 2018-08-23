@@ -1,7 +1,7 @@
 # Title:			  Writing NEON Data in R
 # Site:			  OSBS
 # Data Sources:	  
-# Authors:		  
+# Authors:		  Huijie Wei
 # Date:			 
 
 # Set working directory to where you house "data" directory (with subdirectories raw_data, final_data, scripts, output)
